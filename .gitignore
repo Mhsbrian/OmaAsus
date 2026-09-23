@@ -6,3 +6,7 @@
 # Downloaded release artifacts
 *.pkg.tar.zst
 *.tar.gz
+
+# Agent configuration is for working on the repository, not part of the product.
+/.claude/
+/.codex/

@@ -1,4 +1,0 @@
-# Agent configuration is for working on the repository, not for its users:
-# keep it out of `git archive` (the source tarball on releases).
-.claude export-ignore
-.codex export-ignore

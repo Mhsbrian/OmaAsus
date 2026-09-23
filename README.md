@@ -89,13 +89,13 @@ Graphics, Cooling and ASUS appear only when there is hardware or a daemon behind
 
 ## Design
 
-The original OA monogram pairs a split, chamfered enclosure with an angular A. [Brand assets and usage](docs/brand/README.md) include scalable artwork and the monochrome tray version. The [reliability implementation plan](docs/RELIABILITY-PLAN.md) describes proposed work; it is not a list of completed features.
+The original OA monogram pairs a split, chamfered enclosure with an angular A. [Brand assets and usage](docs/brand/README.md) include scalable artwork and the monochrome tray version.
 
 The interface is a port of [omarchy-site](https://github.com/omacom/omarchy-site)'s design system:
 
-- **Geist** for headings and controls, **JetBrains Mono** for navigation, labels, values and copy.
+- **Geist** for headings and controls, **JetBrains Mono** for navigation, labels, values and copy. Both are under the SIL Open Font License; the licences are next to the fonts in `crates/oma-gui/assets/fonts`.
 - The site's token roles: `bg-deep`, `bg`, `surface`, `surface-2`, `border-subtle`/`strong`, `text`/`secondary`/`muted`, `brand`, `brand-ink`, and the five field bands. Zero corner radius. Opaque surfaces with a one-pixel elevation ring. Brand-filled primary buttons.
-- **Your Omarchy theme drives the colours.** On start, OmaAsus asks `omarchy-theme-current` and reads that theme's `colors.toml`, mixing intermediate shades the way the site does. Change theme, restart, and the app follows.
+- **Your Omarchy theme drives the colours.** On start, OmaAsus asks `omarchy-theme-current` and reads that theme's `colors.toml`, mixing intermediate shades the way the site does. Change theme and the app follows at once, cross-fading to the new colours.
 - The background is the site's **pixel field** as a GPU shader: 10 px cells, Bayer-dithered drifting blobs, corner clustering, a cursor halo, and a subtle pulse with system load.
 - The active profile is set in the site's **3×5 pixel glyph font** with the five brand bands, and the header carries the original OmaAsus OA monogram.
 - The dashboard fills the window and its type scale follows it. On narrow tiles the navigation folds to icons.
@@ -213,7 +213,8 @@ crates/
   oma-gui/     omaasus: iced 0.14 window and layer-shell overlay, profile apply
                pipeline, automation, tray
   oma-cli/     oma: model, inventory, sensors, fan curves, lighting, capture
-research/      the interface notes the code was built from, with live-verified corrections
+research/      references the knowledge base cites (asusctl, supergfxctl, G-Helper),
+               with live-verified corrections
 ```
 
 Hardware is read on sampler and reader threads and written through the helper, the owning daemon over D-Bus, or background tasks; the UI thread renders what those report. A persistent registry keeps every channel live, stale or offline, never missing.
