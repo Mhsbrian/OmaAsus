@@ -296,9 +296,25 @@ pub async fn set_slash_option(conn: &zbus::Connection, device: &LightingDevice, 
     }
 }
 
-/// Show `mode` on the OpenRGB device called `name`.
+/// Show `mode` on every OpenRGB device called `name`. Profiles key lighting
+/// by name, and identical parts share one (a kit of DIMMs lists each stick
+/// under the same name), so all of them take it, not only the first listed.
 pub async fn apply_openrgb(devices: &[RgbDevice], name: &str, mode: &LightingMode) -> Result<(), String> {
-    let d = devices.iter().find(|d| d.name == name).ok_or_else(|| format!("{name} (not connected)"))?;
+    let matching: Vec<&RgbDevice> = devices.iter().filter(|d| d.name == name).collect();
+    if matching.is_empty() {
+        return Err(format!("{name} (not connected)"));
+    }
+    let mut failed = Vec::new();
+    for d in matching {
+        if let Err(e) = apply_openrgb_one(d, name, mode).await {
+            failed.push(e);
+        }
+    }
+    failed.dedup();
+    if failed.is_empty() { Ok(()) } else { Err(failed.join("; ")) }
+}
+
+async fn apply_openrgb_one(d: &RgbDevice, name: &str, mode: &LightingMode) -> Result<(), String> {
     let named = |words: &[&str]| d.modes.iter().find(|m| words.iter().any(|w| m.name.to_ascii_lowercase().contains(w))).map(|m| m.index);
     let r = match mode {
         LightingMode::Off => crate::rgb::turn_off(d.index).await,
