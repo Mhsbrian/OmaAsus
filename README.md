@@ -40,7 +40,7 @@ It runs as a window, as a tray item, and as a layer-shell overlay you toggle ove
 | CPUs | Governor, EPP, SMT, frequency limits, temperatures; boost where the driver offers it (`amd-pstate` from Linux 6.11, `acpi-cpufreq`); package power from an APU's reported power, or RAPL where the kernel lets users read it | cpufreq (`amd-pstate`, `acpi-cpufreq`, `intel_pstate`), hwmon, powercap |
 | Everything else | Any hwmon fan output and sensor, OpenRGB devices, power modes | hwmon, the OpenRGB SDK, `power-profiles-daemon` or ACPI `platform_profile` |
 
-It also works with CoolerControl, which can own the fans instead (while it runs it drives every fan it knows, hubs included, and OmaAsus only switches its Mode per profile), GameMode and Hyprland IPC. None of these is required. A machine without a component doesn't get its controls. The ROG Ally goes through the same `asusd` interfaces but hasn't been tried.
+It also works with CoolerControl, which can own the fans instead (while it runs it drives every fan it knows, hubs included, and OmaAsus only switches its Mode per profile; OmaAsus notices it starting and stopping), GameMode and Hyprland IPC. None of these is required. A machine without a component doesn't get its controls. The ROG Ally goes through the same `asusd` interfaces but hasn't been tried.
 
 ### Tested on
 

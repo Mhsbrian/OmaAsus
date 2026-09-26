@@ -183,7 +183,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 line("Machine", format!("{} · board {} · BIOS {}", m.identity.product, m.identity.board, m.identity.bios)),
                 line("CPU", if cpu_caps.is_empty() { m.cpu.model.clone() } else { format!("{} · {}", m.cpu.model, cpu_caps.join(", ")) }),
                 line("GPUs", or_none(m.gpus.iter().map(|g| format!("{} ({}, {})", gpu_name(&g.name), if g.integrated { "integrated" } else { "discrete" }, format!("{:?}", g.power).to_lowercase())).collect())),
-                line("Fans", if m.fans.is_empty() { "none controllable".into() } else { format!("{} · through {}", m.fans.iter().map(|f| f.label.as_str()).collect::<Vec<_>>().join(", "), owner_name(m.fan_owner)) }),
+                line("Fans", if m.fans.is_empty() { "none controllable".into() } else { format!("{} · through {}", m.fans.iter().map(|f| f.label.as_str()).collect::<Vec<_>>().join(", "), owner_name(m.fan_owner_now(cc_detected))) }),
                 line("Sensors", format!("{} · {}", m.sensors.len(), roles.join(", "))),
                 line("Sources", app.snapshot.as_ref().map(|s| if s.sources.is_empty() { "none sampled yet".to_string() } else { s.sources.iter().map(|h| if h.healthy { h.name.clone() } else { format!("{} (silent {}s)", h.name, h.stalled_s.unwrap_or(0)) }).collect::<Vec<_>>().join(", ") }).unwrap_or_else(|| "waiting for the first frame".into())),
                 line("Lighting", or_none(lights)),
