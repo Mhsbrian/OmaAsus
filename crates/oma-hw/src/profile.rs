@@ -278,6 +278,13 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// Whether this profile's power mode is `live`, one of the machine's
+    /// `choices` (a profile made under power-profiles-daemon names its
+    /// modes; asusd's are matched by kind).
+    pub fn carries_power_mode(&self, live: &str, choices: &[String]) -> bool {
+        self.cpu.power_mode.as_deref().and_then(|w| match_power_mode(w, choices)).is_some_and(|m| m.eq_ignore_ascii_case(live))
+    }
+
     pub fn new(name: &str) -> Self {
         Self {
             id: uuid::Uuid::new_v4(),
@@ -505,6 +512,14 @@ impl Config {
     /// The first profile with this role.
     pub fn profile_by_role(&self, role: ProfileRole) -> Option<&Profile> {
         self.profiles.iter().find(|p| p.role == Some(role))
+    }
+
+    /// The profile to follow a power mode set outside a profile apply (a
+    /// keyboard shortcut, `powerprofilesctl`, a bar widget): the default
+    /// profile when it carries `live`, else the first in order that does.
+    /// `None` when no profile carries it.
+    pub fn profile_for_power_mode(&self, live: &str, choices: &[String]) -> Option<&Profile> {
+        self.profile(self.default_profile).filter(|p| p.carries_power_mode(live, choices)).or_else(|| self.profiles.iter().find(|p| p.carries_power_mode(live, choices)))
     }
 }
 
