@@ -4,7 +4,8 @@
 //! (supergfxd) call for staying off the dGPU first; the helper handing back
 //! the fans it guarded as it stops calls for sending them again; the power
 //! mode changing on asusd or power-profiles-daemon calls for the profile
-//! that carries it to follow.
+//! that carries it to follow; CoolerControl's daemon starting or stopping
+//! changes who drives the fans.
 
 use iced::futures::stream::{self, BoxStream, Stream, StreamExt};
 use iced::futures::SinkExt;
@@ -35,6 +36,9 @@ pub enum Event {
     /// profile (its label) or power-profiles-daemon's active profile. Sent
     /// for a change made anywhere, this app's own writes included.
     PowerMode { owner: Owner, mode: String },
+    /// CoolerControl's daemon started (`true`) or stopped, as its systemd
+    /// unit reports. While it runs it drives every fan it knows.
+    CoolerControl(bool),
 }
 
 #[zbus::proxy(interface = "org.freedesktop.login1.Manager", default_service = "org.freedesktop.login1", default_path = "/org/freedesktop/login1")]
@@ -43,14 +47,29 @@ trait Login1 {
     fn prepare_for_sleep(&self, start: bool) -> zbus::Result<()>;
 }
 
+#[zbus::proxy(interface = "org.freedesktop.systemd1.Manager", default_service = "org.freedesktop.systemd1", default_path = "/org/freedesktop/systemd1")]
+trait SystemdManager {
+    /// Ask for unit property changes on this connection; systemd sends none otherwise.
+    fn subscribe(&self) -> zbus::Result<()>;
+    /// The unit's object, loaded if it isn't yet. A unit that doesn't exist
+    /// loads too, as inactive.
+    fn load_unit(&self, name: &str) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
+}
+
+#[zbus::proxy(interface = "org.freedesktop.systemd1.Unit", default_service = "org.freedesktop.systemd1")]
+trait SystemdUnit {
+    #[zbus(property)]
+    fn active_state(&self) -> zbus::Result<String>;
+}
+
 const AC_POLL: Duration = Duration::from_secs(2);
 
 /// Changes only. A property stream opens with the value as it is, which is
-/// where the mode was, not a change; a daemon that isn't running when the
+/// where things were, not a change; a daemon that isn't running when the
 /// stream opens gives one that never yields.
-fn changes_only(values: impl Stream<Item = String>) -> impl Stream<Item = String> {
+fn changes_only<T: Clone + PartialEq>(values: impl Stream<Item = T>) -> impl Stream<Item = T> {
     values
-        .scan(None::<String>, |last, now| {
+        .scan(None::<T>, |last, now| {
             let changed = last.as_ref().is_some_and(|l| *l != now);
             *last = Some(now.clone());
             std::future::ready(Some(changed.then_some(now)))
@@ -146,6 +165,21 @@ pub fn stream() -> impl Stream<Item = Event> {
                 sources.push(changes_only(modes).map(|mode| Event::PowerMode { owner: Owner::PowerProfilesDaemon, mode }).boxed());
             }
             watching.push("power modes");
+            // CoolerControl's unit: it drives every fan it knows while it runs, so
+            // who drives them changes as it starts and stops. An install without
+            // the unit (detected by its port instead) loads as inactive and never
+            // changes, which leaves what detection found.
+            let unit = async {
+                let manager = SystemdManagerProxy::new(&conn).await?;
+                manager.subscribe().await?;
+                let path = manager.load_unit("coolercontrold.service").await?;
+                SystemdUnitProxy::builder(&conn).path(path)?.build().await
+            };
+            if let Ok(unit) = unit.await {
+                let running = unit.receive_active_state_changed().await.filter_map(|c| async move { c.get().await.ok().map(|s| s == "active" || s == "reloading") });
+                sources.push(changes_only(running).map(Event::CoolerControl).boxed());
+                watching.push("CoolerControl");
+            }
         }
         tracing::info!(events = %watching.join(", "), "watching system events");
         let mut events = stream::select_all(sources);

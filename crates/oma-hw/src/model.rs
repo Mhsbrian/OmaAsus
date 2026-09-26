@@ -337,7 +337,28 @@ pub struct HardwareModel {
     pub notes: Vec<Note>,
 }
 
+/// Who drives the fans: CoolerControl while its daemon runs (it drives every
+/// fan it knows), else asusd where it stores the curves, else OmaAsus where
+/// an output takes a duty, else the firmware.
+fn fan_owner(fans: &[FanOutput], coolercontrold: bool) -> Owner {
+    if coolercontrold {
+        Owner::CoolerControl
+    } else if fans.iter().any(|f| matches!(f.backend, FanBackend::AsusdCurve { .. })) {
+        Owner::Asusd
+    } else if fans.iter().any(|f| f.caps.duty) {
+        Owner::OmaAsus
+    } else {
+        Owner::Firmware
+    }
+}
+
 impl HardwareModel {
+    /// [`Self::fan_owner`] with CoolerControl's daemon running or not: the
+    /// field says what detection found, and the daemon starts and stops.
+    pub fn fan_owner_now(&self, coolercontrold: bool) -> Owner {
+        fan_owner(&self.fans, coolercontrold)
+    }
+
     pub fn build(raw: &RawInventory, overrides: &Overrides) -> Self {
         let identity = Identity::from_dmi(&raw.system.dmi, overrides);
         let mut notes = Vec::new();
@@ -353,15 +374,7 @@ impl HardwareModel {
                 notes.push(Note { what: format!("{}: minimum duty {v:.0} %", f.id), source: Source::User });
             }
         }
-        let fan_owner = if raw.system.daemons.coolercontrold {
-            Owner::CoolerControl
-        } else if fans.iter().any(|f| matches!(f.backend, FanBackend::AsusdCurve { .. })) {
-            Owner::Asusd
-        } else if fans.iter().any(|f| f.caps.duty) {
-            Owner::OmaAsus
-        } else {
-            Owner::Firmware
-        };
+        let fan_owner = fan_owner(&fans, raw.system.daemons.coolercontrold);
 
         let mut model = Self { identity, platform: raw.system.platform.clone(), cpu: raw.system.cpu.clone(), fans, sensors, gpus, lighting, controls, fan_owner, notes };
         let hidden: BTreeSet<&str> = overrides.hide.iter().map(String::as_str).collect();

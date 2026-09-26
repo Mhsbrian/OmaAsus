@@ -453,20 +453,7 @@ impl App {
         // Only when the dGPU is awake: NVML would wake a sleeping one.
         let nvi = Task::perform(async { tokio::task::spawn_blocking(|| (oma_hw::nvidia::awake() && telemetry::dgpu_open_ok()).then(|| oma_hw::nvidia::NvidiaGpu::open(0).and_then(|g| g.info()).ok().map(Arc::new)).flatten()).await.unwrap_or(None) }, Message::NvidiaInfo);
         let open = if overlay_only { Task::none() } else { Task::done(Message::OpenWindow) };
-        let cc_cfg = app.config.coolercontrol.clone();
-        let cc = Task::perform(
-            async move {
-                let cc = oma_hw::coolercontrol::CoolerControl::new(&cc_cfg.url, cc_cfg.password.clone());
-                if !cc.handshake().await {
-                    return (false, Vec::new());
-                }
-                match cc.modes().await {
-                    Ok(m) => (true, m),
-                    Err(_) => (false, Vec::new()),
-                }
-            },
-            |(ok, modes)| Message::CcReady(ok, modes),
-        );
+        let cc = app.probe_cc(std::time::Duration::ZERO);
         // The OpenRGB probe is a TCP connect: off the UI thread, like every other probe.
         let asus = Task::perform(crate::pages::asus::load(), Message::AsusLoaded);
         // iced_exwlshell's daemon does not apply `Settings::fonts`; the runtime font
@@ -537,6 +524,25 @@ impl App {
 
     fn cc_client(&self) -> oma_hw::coolercontrol::CoolerControl {
         self.cc.clone().unwrap_or_else(|| oma_hw::coolercontrol::CoolerControl::new(&self.config.coolercontrol.url, self.config.coolercontrol.password.clone()))
+    }
+
+    /// Whether CoolerControl's API answers, and its Modes, `after` a pause:
+    /// its daemon listens a moment after its unit reports active.
+    fn probe_cc(&self, after: std::time::Duration) -> Task<Message> {
+        let cc = self.cc_client();
+        Task::perform(
+            async move {
+                tokio::time::sleep(after).await;
+                if !cc.handshake().await {
+                    return (false, Vec::new());
+                }
+                match cc.modes().await {
+                    Ok(m) => (true, m),
+                    Err(_) => (false, Vec::new()),
+                }
+            },
+            |(ok, modes)| Message::CcReady(ok, modes),
+        )
     }
 
     fn edit_cooling(&mut self, f: impl FnOnce(&mut oma_hw::profile::CoolingSettings)) {
@@ -2030,6 +2036,35 @@ impl App {
                         let follow = self.follow_power_mode(&mode);
                         // asusd puts the mode's own firmware limits in place: show them.
                         if owner == Owner::Asusd { Task::batch([reload, follow]) } else { follow }
+                    }
+                    Event::CoolerControl(running) => {
+                        let before = self.effective_fan_owner();
+                        if let Some(inv) = &mut self.inventory {
+                            Arc::make_mut(inv).daemons.coolercontrold = running;
+                        }
+                        let after = self.effective_fan_owner();
+                        tracing::info!(running, owner = ?after, "CoolerControl's daemon changed state");
+                        if !running {
+                            self.cc_connected = false;
+                            self.cc_modes.clear();
+                        }
+                        let mut tasks = Vec::new();
+                        if running {
+                            // Its Modes, once its API answers.
+                            tasks.push(self.probe_cc(std::time::Duration::from_secs(2)));
+                        }
+                        if before != after {
+                            let what = if after == FanOwner::CoolerControl { "CoolerControl started: it drives the fans now" } else { "CoolerControl stopped: OmaAsus drives the fans now" };
+                            self.toast = Some((what.into(), true));
+                            self.toast_at = Some(std::time::Instant::now());
+                            if after == FanOwner::CoolerControl {
+                                // Hand every output back before it takes them. When it
+                                // stops, the engine drives them again on its next tick.
+                                let cmds = self.fan_engine.release_all(std::time::Instant::now());
+                                tasks.push(self.dispatch_fan_cmds(cmds));
+                            }
+                        }
+                        Task::batch(tasks)
                     }
                 }
             }
