@@ -71,3 +71,28 @@ fn power_modes_carry_across_machines() {
     assert_eq!(match_power_mode("balanced", &asusd), Some("Balanced"));
     assert_eq!(match_power_mode("Custom", &asusd), None);
 }
+
+/// A power mode set outside a profile (a keyboard shortcut, `powerprofilesctl`)
+/// is followed by the profile that carries it: the default profile when it
+/// does, else the first in order.
+#[test]
+fn a_power_mode_set_elsewhere_names_the_profile_that_follows_it() {
+    let mut c: Config = toml::from_str(&fixture("configs/v1-g14-defaults.toml")).expect("v1 parses");
+    c.migrate();
+    c.default_profile = c.profiles[1].id;
+    let ppd = ["power-saver".to_string(), "balanced".into(), "performance".into()];
+    fn name(p: Option<&oma_hw::profile::Profile>) -> Option<&str> {
+        p.map(|p| p.name.as_str())
+    }
+    assert_eq!(name(c.profile_for_power_mode("power-saver", &ppd)), Some("Silent"));
+    // Gaming and Turbo both carry performance: the first in order, unless the default is one of them.
+    assert_eq!(name(c.profile_for_power_mode("performance", &ppd)), Some("Gaming"));
+    c.default_profile = c.profiles[3].id;
+    assert_eq!(name(c.profile_for_power_mode("performance", &ppd)), Some("Turbo"));
+    // The same profiles mean something where asusd names the modes.
+    let asusd = ["Quiet".to_string(), "Balanced".into(), "Performance".into()];
+    assert!(c.profiles[0].carries_power_mode("Quiet", &asusd));
+    assert!(!c.profiles[0].carries_power_mode("Balanced", &asusd));
+    assert_eq!(name(c.profile_for_power_mode("Quiet", &asusd)), Some("Silent"));
+    assert_eq!(name(c.profile_for_power_mode("Custom", &asusd)), None, "no profile carries it");
+}

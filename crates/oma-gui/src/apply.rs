@@ -22,6 +22,9 @@ pub enum Origin {
     Automation,
     /// Again after resume, a charger change or a graphics switch.
     Reapply,
+    /// The power mode was switched outside a profile (a keyboard shortcut,
+    /// `powerprofilesctl`, a bar widget): the profile that carries it follows.
+    PowerMode,
 }
 
 pub struct Context {

@@ -604,6 +604,32 @@ impl App {
         )
     }
 
+    /// The power mode is `live` now, set outside a profile apply: a keyboard
+    /// shortcut, `powerprofilesctl`, a bar widget, or this app's own power-mode
+    /// buttons. The profile that carries the mode follows, so the rest of what
+    /// the machine runs (CPU, GPU, fans, lighting) matches the mode it is in.
+    /// An apply's own write reports here too; while one runs, the mode is its
+    /// business, and it stays where the apply leaves it.
+    fn follow_power_mode(&mut self, live: &str) -> Task<Message> {
+        if matches!(self.coord.status(std::time::Instant::now()), Some(crate::coordinator::Status::Applying { .. })) {
+            return Task::none();
+        }
+        let Some(choices) = self.model.as_ref().map(|m| m.controls.power_modes.clone()) else { return Task::none() };
+        if self.active_profile().is_some_and(|p| p.carries_power_mode(live, &choices)) {
+            return Task::none();
+        }
+        match self.config.profile_for_power_mode(live, &choices).map(|p| (p.id, p.name.clone())) {
+            Some((id, name)) => {
+                tracing::info!(mode = live, profile = %name, "power mode changed outside a profile; following it");
+                self.start_apply(id, crate::apply::Origin::PowerMode)
+            }
+            None => {
+                tracing::info!(mode = live, "power mode changed outside a profile; no profile carries it");
+                Task::none()
+            }
+        }
+    }
+
     /// Point count of a curve the firmware runs on its own sensor (asusd: 8).
     fn fixed_curve_points(&self, t: &FanTarget) -> Option<usize> {
         let spec = self.model.as_ref()?.fan(t.as_str())?.caps.firmware_curve.clone()?;
@@ -1984,6 +2010,27 @@ impl App {
                     }
                     Event::Resumed => Task::batch([reload, Task::done(Message::Reapply("resume"))]),
                     Event::Power(on) => Task::batch([reload, Task::done(Message::Reapply(if on { "charger connected" } else { "charger disconnected" }))]),
+                    Event::PowerMode { owner, mode } => {
+                        use oma_hw::model::Owner;
+                        // What the daemon says now, whoever set it.
+                        match owner {
+                            Owner::Asusd => self.asus.profile = oma_hw::asusd::PlatformProfile::from_label(&mode),
+                            Owner::PowerProfilesDaemon => {
+                                if let Some(ppd) = &mut self.ppd {
+                                    ppd.active = mode.clone();
+                                }
+                            }
+                            _ => {}
+                        }
+                        // Only the daemon that owns power modes here is followed:
+                        // power-profiles-daemon mirrors asusd's choice on laptops.
+                        if self.model.as_ref().and_then(|m| m.controls.power_owner) != Some(owner) {
+                            return Task::none();
+                        }
+                        let follow = self.follow_power_mode(&mode);
+                        // asusd puts the mode's own firmware limits in place: show them.
+                        if owner == Owner::Asusd { Task::batch([reload, follow]) } else { follow }
+                    }
                 }
             }
             Message::GraphicsSettled => Task::batch([Task::perform(crate::pages::asus::load(), Message::AsusLoaded), Task::done(Message::Reapply("graphics switch"))]),

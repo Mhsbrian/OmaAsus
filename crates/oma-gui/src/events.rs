@@ -2,10 +2,15 @@
 //! disconnecting (limits differ on battery) call for re-applying the active
 //! profile; a graphics switch starting and the dGPU coming back on the bus
 //! (supergfxd) call for staying off the dGPU first; the helper handing back
-//! the fans it guarded as it stops calls for sending them again.
+//! the fans it guarded as it stops calls for sending them again; the power
+//! mode changing on asusd or power-profiles-daemon calls for the profile
+//! that carries it to follow.
 
 use iced::futures::stream::{self, BoxStream, Stream, StreamExt};
 use iced::futures::SinkExt;
+use oma_hw::asusd::{PlatformProfile, PlatformProxy};
+use oma_hw::model::Owner;
+use oma_hw::ppd::PowerProfilesProxy;
 use oma_hw::supergfx::{dgpu_arrived, GfxPower, SuperGfxProxy, UserActionRequired};
 use std::time::Duration;
 
@@ -26,6 +31,10 @@ pub enum Event {
     /// The helper ran out of attempts to hand these outputs back: nothing
     /// drives them now.
     RecoveryAbandoned(String),
+    /// The power mode changed on the daemon `owner` names: asusd's platform
+    /// profile (its label) or power-profiles-daemon's active profile. Sent
+    /// for a change made anywhere, this app's own writes included.
+    PowerMode { owner: Owner, mode: String },
 }
 
 #[zbus::proxy(interface = "org.freedesktop.login1.Manager", default_service = "org.freedesktop.login1", default_path = "/org/freedesktop/login1")]
@@ -35,6 +44,19 @@ trait Login1 {
 }
 
 const AC_POLL: Duration = Duration::from_secs(2);
+
+/// Changes only. A property stream opens with the value as it is, which is
+/// where the mode was, not a change; a daemon that isn't running when the
+/// stream opens gives one that never yields.
+fn changes_only(values: impl Stream<Item = String>) -> impl Stream<Item = String> {
+    values
+        .scan(None::<String>, |last, now| {
+            let changed = last.as_ref().is_some_and(|l| *l != now);
+            *last = Some(now.clone());
+            std::future::ready(Some(changed.then_some(now)))
+        })
+        .filter_map(std::future::ready)
+}
 
 /// Whether mains power is connected; `None` without a mains supply (desktops).
 fn on_ac() -> Option<bool> {
@@ -112,6 +134,18 @@ pub fn stream() -> impl Stream<Item = Event> {
                 );
                 watching.push("helper hand-backs");
             }
+            // Power modes, as the daemons report them: a change made anywhere (a
+            // keyboard shortcut, `powerprofilesctl`, a bar widget) is seen. Both
+            // are watched; the app follows the one that owns power modes here.
+            if let Ok(p) = PlatformProxy::new(&conn).await {
+                let modes = p.receive_platform_profile_changed().await.filter_map(|c| async move { c.get().await.ok().map(|v| PlatformProfile::from_u32(v).label().to_string()) });
+                sources.push(changes_only(modes).map(|mode| Event::PowerMode { owner: Owner::Asusd, mode }).boxed());
+            }
+            if let Ok(p) = PowerProfilesProxy::new(&conn).await {
+                let modes = p.receive_active_profile_changed().await.filter_map(|c| async move { c.get().await.ok() });
+                sources.push(changes_only(modes).map(|mode| Event::PowerMode { owner: Owner::PowerProfilesDaemon, mode }).boxed());
+            }
+            watching.push("power modes");
         }
         tracing::info!(events = %watching.join(", "), "watching system events");
         let mut events = stream::select_all(sources);
