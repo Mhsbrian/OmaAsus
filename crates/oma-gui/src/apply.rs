@@ -2,11 +2,13 @@
 //!
 //! Power mode first, because firmware applies the mode's own limits and fan
 //! curves when it changes; then firmware limits once the new mode has settled;
-//! then CPU and GPU. Fans follow through the fan engine. A newer apply
-//! supersedes one still running, and every step reports whether it applied,
-//! was skipped (and why) or failed.
+//! then CPU; then the CoolerControl Mode where CoolerControl drives the fans
+//! (the engine's own curves run on their own tick); then GPU and lighting. A
+//! newer apply supersedes one still running, and every step reports whether
+//! it applied, was skipped (and why) or failed.
 
 use oma_hw::asusd::{self, PlatformProfile, PlatformProxy};
+use oma_hw::coolercontrol::CoolerControl;
 use oma_hw::helper::Controller;
 use oma_hw::model::{FirmwareAttr, GpuVendor, HardwareModel, Owner, ARMOURY};
 use oma_hw::profile::{match_power_mode, Profile};
@@ -27,12 +29,21 @@ pub enum Origin {
     PowerMode,
 }
 
+/// CoolerControl drives the fans: the profile's Mode goes to it, if it names one.
+pub struct CoolerControlFans {
+    pub client: CoolerControl,
+    /// The Mode's uid, and its name for the report.
+    pub mode: Option<(String, String)>,
+}
+
 pub struct Context {
     pub inv: Option<Arc<SystemInventory>>,
     pub model: Option<Arc<HardwareModel>>,
     /// The latest apply's number; this one stops when it's no longer the latest.
     pub generation: Arc<AtomicU64>,
     pub this: u64,
+    /// Set where CoolerControl drives the fans.
+    pub cc: Option<CoolerControlFans>,
 }
 
 impl Context {
@@ -163,7 +174,22 @@ pub async fn apply_profile(p: Profile, cx: Context) -> Report {
     }
     checkpoint!();
 
-    // 4. GPUs.
+    // 4. Fans, where CoolerControl drives them: its Mode for this profile.
+    //    Before the GPUs and lighting, so cooling follows the mode change as
+    //    soon as it can. A profile without a Mode leaves the fans as they
+    //    are, and says so: its own curves don't run while CoolerControl does.
+    if let Some(cc) = &cx.cc {
+        match &cc.mode {
+            Some((uid, name)) => match cc.client.activate_mode(uid).await {
+                Ok(()) => r.applied.push(format!("CoolerControl mode {name}")),
+                Err(e) => r.failed.push(e.to_string()),
+            },
+            None => r.skipped.push("fans (CoolerControl drives them and this profile links no Mode)".into()),
+        }
+        checkpoint!();
+    }
+
+    // 5. GPUs.
     nvidia_step(&p, &ctl, &mut r).await;
     if let Some(level) = &p.gpu.amd_perf_level {
         let slots: Vec<String> = cx.model.as_ref().map(|m| m.gpus.iter().filter(|g| g.vendor == GpuVendor::Amd).filter_map(|g| g.pci_slot.clone()).collect()).unwrap_or_default();
@@ -180,7 +206,7 @@ pub async fn apply_profile(p: Profile, cx: Context) -> Report {
 
     checkpoint!();
 
-    // 5. Lighting, on the devices this machine has.
+    // 6. Lighting, on the devices this machine has.
     if !p.lighting.zones.is_empty() {
         let conn = zbus::Connection::system().await.ok();
         let mut openrgb: Option<Result<Vec<oma_hw::rgb::RgbDevice>, String>> = None;
@@ -211,7 +237,7 @@ pub async fn apply_profile(p: Profile, cx: Context) -> Report {
         }
     }
 
-    // 6. Graphics mode: switching can log you out or need a reboot, so a
+    // 7. Graphics mode: switching can log you out or need a reboot, so a
     //    profile never does it on its own.
     if let Some(mode) = &p.gfx_mode {
         r.skipped.push(format!("graphics mode {mode} (switch it on the ASUS page)"));
