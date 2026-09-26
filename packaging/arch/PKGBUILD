@@ -1,6 +1,6 @@
 # Maintainer: Brian Honeycutt
 pkgname=omaasus
-pkgver=0.2.2
+pkgver=0.2.3
 pkgrel=1
 pkgdesc='Control center and Hyprland overlay for ASUS hardware'
 arch=('x86_64')
