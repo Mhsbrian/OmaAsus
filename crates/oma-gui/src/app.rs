@@ -588,26 +588,16 @@ impl App {
             be.set_power_mode(pr.cpu.power_mode.clone());
         }
         self.apply_generation.store(generation, std::sync::atomic::Ordering::SeqCst);
-        let cx = crate::apply::Context { inv: self.inventory.clone(), model: self.model.clone(), generation: self.apply_generation.clone(), this: generation };
-        let latest = self.apply_generation.clone();
-        let cc = (self.effective_fan_owner() == FanOwner::CoolerControl).then(|| (self.cc_client(), pr.cc_mode.clone()));
+        let cc = (self.effective_fan_owner() == FanOwner::CoolerControl).then(|| {
+            let mode = pr.cc_mode.clone().map(|uid| {
+                let name = self.cc_modes.iter().find(|m| m.uid == uid).map(|m| m.name.clone()).unwrap_or_else(|| uid.clone());
+                (uid, name)
+            });
+            crate::apply::CoolerControlFans { client: self.cc_client(), mode }
+        });
+        let cx = crate::apply::Context { inv: self.inventory.clone(), model: self.model.clone(), generation: self.apply_generation.clone(), this: generation, cc };
         let (name, origin) = (request.name.clone(), request.origin);
-        Task::perform(
-            async move {
-                let mut report = crate::apply::apply_profile(pr, cx).await;
-                // Never activate a CoolerControl mode for a profile a newer request
-                // has replaced: the newer apply activates its own.
-                let current = !report.superseded && latest.load(std::sync::atomic::Ordering::SeqCst) == generation;
-                if current
-                    && let Some((cc, Some(mode))) = cc
-                    && let Err(e) = cc.activate_mode(&mode).await
-                {
-                    report.failed.push(format!("CoolerControl: {e}"));
-                }
-                report
-            },
-            move |report| Message::ProfileApplied(generation, name.clone(), origin, report),
-        )
+        Task::perform(crate::apply::apply_profile(pr, cx), move |report| Message::ProfileApplied(generation, name.clone(), origin, report))
     }
 
     /// The power mode is `live` now, set outside a profile apply: a keyboard
